@@ -18,6 +18,7 @@ OWM_API_KEY = os.environ.get("OWM_API_KEY", "")
 FRA_URL = "https://fragis.fra.dot.gov/arcgis/rest/services/FRA/FRAAtGradeX_iOS/MapServer/0/query"
 NWS_ALERTS_URL = "https://api.weather.gov/alerts/active"
 OWM_URL = "https://api.openweathermap.org/data/2.5/weather"
+USGS_NWIS_URL  = "https://waterservices.usgs.gov/nwis/iv/"
 
 # NWS event severity ordering
 FLOOD_WARNING_EVENTS = {
@@ -145,6 +146,67 @@ def fetch_crossings(lat: float, lon: float, radius_miles: float) -> list:
         return data.get("features", [])
     except Exception as e:
         return []
+
+
+def fetch_gauges(lat: float, lon: float, radius_miles: float) -> list:
+    """Fetch active USGS stream gauges (gage height) within a bounding box."""
+    north, _ = offset_point(lat, lon, 0, radius_miles)
+    south, _ = offset_point(lat, lon, 180, radius_miles)
+    _, east  = offset_point(lat, lon, 90, radius_miles)
+    _, west  = offset_point(lat, lon, 270, radius_miles)
+    try:
+        resp = requests.get(
+            USGS_NWIS_URL,
+            params={
+                "format": "json",
+                "bBox": f"{west:.4f},{south:.4f},{east:.4f},{north:.4f}",
+                "parameterCd": "00065",
+                "siteStatus": "active",
+                "siteType": "ST",
+            },
+            headers={"User-Agent": "FRA-Flood-Monitor/1.0 contact@example.com"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        gauges = []
+        for series in resp.json().get("value", {}).get("timeSeries", []):
+            source     = series.get("sourceInfo", {})
+            geo        = source.get("geoLocation", {}).get("geogLocation", {})
+            g_lat      = geo.get("latitude")
+            g_lon      = geo.get("longitude")
+            if g_lat is None or g_lon is None:
+                continue
+            values = series.get("values", [{}])[0].get("value", [])
+            stage  = None
+            if values:
+                try:
+                    stage = float(values[-1].get("value", ""))
+                except (ValueError, TypeError):
+                    pass
+            site_codes = source.get("siteCode", [{}])
+            gauges.append({
+                "name":     source.get("siteName", "Unknown"),
+                "id":       site_codes[0].get("value", "") if site_codes else "",
+                "lat":      g_lat,
+                "lon":      g_lon,
+                "stage_ft": stage,
+            })
+        return gauges
+    except Exception:
+        return []
+
+
+@app.route("/api/gauges")
+def api_gauges():
+    try:
+        lat          = float(request.args["lat"])
+        lon          = float(request.args["lon"])
+        radius_miles = float(request.args.get("radius_miles", 25))
+    except (KeyError, ValueError):
+        return jsonify({"error": "lat and lon are required"}), 400
+
+    gauges = fetch_gauges(lat, lon, radius_miles)
+    return jsonify({"count": len(gauges), "gauges": gauges})
 
 
 @app.route("/")

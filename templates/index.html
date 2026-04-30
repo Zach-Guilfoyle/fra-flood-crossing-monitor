@@ -8,6 +8,8 @@
   <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Esri Leaflet (for FEMA NFHL dynamic map layer) -->
+  <script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
 
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -368,6 +370,49 @@
       color: #7ec8e3;
     }
 
+    /* Layer toggles */
+    #layers-panel {
+      padding: 12px 16px;
+      border-bottom: 1px solid #1e3a5f;
+    }
+
+    #layers-panel h3 {
+      font-size: 0.72rem;
+      color: #5a7fa0;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 8px;
+    }
+
+    .layer-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .layer-row input[type=checkbox] {
+      accent-color: #3a8fd4;
+      width: 14px;
+      height: 14px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .layer-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .layer-row span {
+      font-size: 0.78rem;
+      color: #c0d4e8;
+    }
+
     /* Scrollbar */
     ::-webkit-scrollbar { width: 5px; }
     ::-webkit-scrollbar-track { background: #0f1923; }
@@ -449,6 +494,22 @@
       </div>
     </div>
 
+    <!-- Layer toggles -->
+    <div id="layers-panel">
+      <h3>Layers</h3>
+      <label class="layer-row"><input type="checkbox" id="lyr-critical" checked><div class="layer-dot" style="background:#ff4f4f"></div><span>Critical</span></label>
+      <label class="layer-row"><input type="checkbox" id="lyr-high" checked><div class="layer-dot" style="background:#ff9a3c"></div><span>High Risk</span></label>
+      <label class="layer-row"><input type="checkbox" id="lyr-moderate" checked><div class="layer-dot" style="background:#f5c518"></div><span>Moderate</span></label>
+      <label class="layer-row"><input type="checkbox" id="lyr-low" checked><div class="layer-dot" style="background:#3ecf6e"></div><span>Low Risk</span></label>
+      <label class="layer-row"><input type="checkbox" id="lyr-radius" checked><div class="layer-dot" style="background:#3a8fd4;border-radius:0"></div><span>Search Radius</span></label>
+      <label class="layer-row"><input type="checkbox" id="lyr-flood" checked><div class="layer-dot" style="background:#7b2fff;opacity:0.7"></div><span>FEMA Flood Zones</span></label>
+      <div id="flood-opacity-row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding-left:22px;">
+        <input type="range" id="flood-opacity" min="10" max="90" value="50" style="flex:1;accent-color:#7b2fff;">
+        <span id="flood-opacity-label" style="font-size:0.72rem;color:#5a7fa0;min-width:32px;text-align:right;">50%</span>
+      </div>
+      <label class="layer-row"><input type="checkbox" id="lyr-gauges" checked><div class="layer-dot" style="background:#00d4ff"></div><span>River Gauges (USGS)</span></label>
+    </div>
+
     <!-- Crossing list -->
     <div id="crossings-panel">
       <h3>Crossings <span id="crossing-count" style="color:#3a8fd4"></span></h3>
@@ -471,6 +532,13 @@
       <div class="legend-row"><div class="legend-dot" style="background:#ff9a3c"></div>High — Flood Watch</div>
       <div class="legend-row"><div class="legend-dot" style="background:#f5c518"></div>Moderate — Heavy Rain</div>
       <div class="legend-row"><div class="legend-dot" style="background:#3ecf6e"></div>Low — No Alerts</div>
+      <div style="border-top:1px solid #1e3a5f;margin:7px 0"></div>
+      <h4>FEMA Flood Zones</h4>
+      <div class="legend-row"><div class="legend-dot" style="background:#7b2fff"></div>Zone A/AE — 100-yr flood</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#b388ff"></div>Zone X — 500-yr / minimal</div>
+      <div style="border-top:1px solid #1e3a5f;margin:7px 0"></div>
+      <h4>River Gauges (USGS)</h4>
+      <div class="legend-row"><div style="width:22px;flex-shrink:0"><svg xmlns="http://www.w3.org/2000/svg" width="22" height="10" viewBox="0 0 22 10"><path d="M1 3 Q4 0 7 3 Q10 6 13 3 Q16 0 19 3" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M1 8 Q4 5 7 8 Q10 11 13 8 Q16 5 19 8" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/></svg></div>Stream gauge (live stage)</div>
     </div>
   </div>
 
@@ -487,7 +555,102 @@
 
   let centerMarker = null;
   let radiusCircle = null;
-  let crossingLayer = L.layerGroup().addTo(map);
+
+  const crossingLayers = {
+    critical: L.layerGroup().addTo(map),
+    high:     L.layerGroup().addTo(map),
+    moderate: L.layerGroup().addTo(map),
+    low:      L.layerGroup().addTo(map),
+  };
+
+  // Layer toggle checkboxes
+  ['critical', 'high', 'moderate', 'low'].forEach(risk => {
+    document.getElementById(`lyr-${risk}`).addEventListener('change', function() {
+      this.checked ? crossingLayers[risk].addTo(map) : map.removeLayer(crossingLayers[risk]);
+    });
+  });
+
+  document.getElementById('lyr-radius').addEventListener('change', function() {
+    if (radiusCircle) {
+      this.checked ? radiusCircle.addTo(map) : map.removeLayer(radiusCircle);
+    }
+  });
+
+  // FEMA National Flood Hazard Layer via Esri Leaflet
+  // No layers[] restriction — lets the service render whatever is visible at each zoom level
+  const floodZoneLayer = L.esri.dynamicMapLayer({
+    url: 'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer',
+    opacity: 0.5,
+    attribution: '<a href="https://www.fema.gov/flood-maps" target="_blank">FEMA NFHL</a>',
+  }).addTo(map);
+
+  document.getElementById('lyr-flood').addEventListener('change', function() {
+    const opRow = document.getElementById('flood-opacity-row');
+    if (this.checked) {
+      floodZoneLayer.addTo(map);
+      opRow.style.display = 'flex';
+    } else {
+      map.removeLayer(floodZoneLayer);
+      opRow.style.display = 'none';
+    }
+  });
+
+  document.getElementById('flood-opacity').addEventListener('input', function() {
+    floodZoneLayer.setOpacity(this.value / 100);
+    document.getElementById('flood-opacity-label').textContent = this.value + '%';
+  });
+
+  // USGS river gauge layer
+  const gaugeLayer = L.layerGroup().addTo(map);
+  let lastGaugeFetch = null;
+
+  document.getElementById('lyr-gauges').addEventListener('change', function() {
+    if (this.checked) {
+      gaugeLayer.addTo(map);
+      if (lastGaugeFetch) fetchAndRenderGauges(...lastGaugeFetch);
+    } else {
+      map.removeLayer(gaugeLayer);
+    }
+  });
+
+  const GAUGE_COLOR = '#00d4ff';
+
+  function makeGaugeIcon(color) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="18" viewBox="0 0 22 18">
+      <path d="M1 5 Q4 2 7 5 Q10 8 13 5 Q16 2 19 5 Q20.5 6.5 21 7" stroke="${color}" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+      <path d="M1 10 Q4 7 7 10 Q10 13 13 10 Q16 7 19 10 Q20.5 11.5 21 12" stroke="${color}" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+      <path d="M1 15 Q4 12 7 15 Q10 18 13 15 Q16 12 19 15 Q20.5 16.5 21 17" stroke="${color}" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+    </svg>`;
+    return L.divIcon({
+      className: '',
+      html: `<div style="filter:drop-shadow(0 0 3px ${color}88)">${svg}</div>`,
+      iconSize: [22, 18],
+      iconAnchor: [11, 9],
+      popupAnchor: [0, -10],
+    });
+  }
+
+  async function fetchAndRenderGauges(lat, lon, radius) {
+    lastGaugeFetch = [lat, lon, radius];
+    if (!document.getElementById('lyr-gauges').checked) return;
+    try {
+      const resp = await fetch(`/api/gauges?lat=${lat}&lon=${lon}&radius_miles=${radius}`);
+      const data = await resp.json();
+      gaugeLayer.clearLayers();
+      (data.gauges || []).forEach(g => {
+        const stageText = g.stage_ft != null ? `${g.stage_ft.toFixed(2)} ft` : 'No reading';
+        const marker = L.marker([g.lat, g.lon], { icon: makeGaugeIcon(GAUGE_COLOR) });
+        marker.bindPopup(`
+          <div class="popup-id">${g.name}</div>
+          <div class="popup-row">USGS Site: <span>${g.id || 'N/A'}</span></div>
+          <div class="popup-row">Stage: <span style="color:#00d4ff;font-weight:700">${stageText}</span></div>
+        `);
+        gaugeLayer.addLayer(marker);
+      });
+    } catch (e) {
+      console.warn('Gauge fetch failed:', e);
+    }
+  }
 
   const RISK_COLORS = {
     critical: '#ff4f4f',
@@ -534,7 +697,8 @@
       fillColor: '#3a8fd4',
       fillOpacity: 0.06,
       dashArray: '6 4',
-    }).addTo(map);
+    });
+    if (document.getElementById('lyr-radius').checked) radiusCircle.addTo(map);
   }
 
   // ── Radius slider ─────────────────────────────────────────────────────────
@@ -567,6 +731,7 @@
       if (!resp.ok) throw new Error('Server error: ' + resp.status);
       const data = await resp.json();
       renderResults(data);
+      fetchAndRenderGauges(lat, lon, radius);
     } catch (err) {
       alert('Error fetching data: ' + err.message);
     } finally {
@@ -595,8 +760,8 @@
     // Alerts
     renderAlerts(data.alerts || [], data.nws_level);
 
-    // Map markers
-    crossingLayer.clearLayers();
+    // Map markers — populate per-risk layer groups
+    Object.values(crossingLayers).forEach(lg => lg.clearLayers());
     const crossings = data.crossings || [];
     crossings.forEach(c => {
       const color = RISK_COLORS[c.risk] || RISK_COLORS.low;
@@ -620,7 +785,7 @@
         <div class="popup-row">Type: <span>${typeLabel}</span></div>
         <div class="popup-row">Lat/Lon: <span>${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}</span></div>
       `);
-      crossingLayer.addLayer(marker);
+      (crossingLayers[c.risk] || crossingLayers.low).addLayer(marker);
     });
 
     // Sidebar list
@@ -666,10 +831,12 @@
       `;
       item.addEventListener('click', () => {
         map.setView([c.lat, c.lon], 14);
-        crossingLayer.eachLayer(layer => {
-          if (layer.getLatLng && Math.abs(layer.getLatLng().lat - c.lat) < 0.0001) {
-            layer.openPopup();
-          }
+        Object.values(crossingLayers).forEach(lg => {
+          lg.eachLayer(layer => {
+            if (layer.getLatLng && Math.abs(layer.getLatLng().lat - c.lat) < 0.0001) {
+              layer.openPopup();
+            }
+          });
         });
       });
       list.appendChild(item);
@@ -692,9 +859,10 @@
     document.getElementById('btn-analyze').disabled = on;
   }
 
-  // Init center marker
+  // Init center marker and default gauge load
   updateCenterMarker(30.2672, -97.7431);
   updateCircle(30.2672, -97.7431, 25);
+  fetchAndRenderGauges(30.2672, -97.7431, 25);
 </script>
 </body>
 </html>
