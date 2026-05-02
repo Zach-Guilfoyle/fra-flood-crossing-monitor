@@ -138,6 +138,66 @@
       margin-top: 6px;
     }
 
+    .zip-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .zip-row input {
+      flex: 1;
+      background: #0f1923;
+      border: 1px solid #1e3a5f;
+      color: #e0e6ed;
+      border-radius: 5px;
+      padding: 6px 9px;
+      font-size: 0.85rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .zip-row input:focus { border-color: #3a8fd4; }
+
+    #btn-zip {
+      padding: 6px 12px;
+      background: #1a3a5f;
+      color: #7ec8e3;
+      border: 1px solid #1e3a5f;
+      border-radius: 5px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+
+    #btn-zip:hover { background: #1e4a78; }
+    #btn-zip:disabled { opacity: 0.5; cursor: default; }
+
+    .or-divider {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 0.7rem;
+      color: #3d5978;
+    }
+
+    .or-divider::before,
+    .or-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: #1e3a5f;
+    }
+
+    #zip-status {
+      font-size: 0.7rem;
+      color: #ff9a3c;
+      margin-bottom: 6px;
+      min-height: 1em;
+    }
+
     /* Stats */
     #stats-panel {
       padding: 12px 16px;
@@ -461,6 +521,13 @@
 
     <!-- Controls -->
     <div class="panel">
+      <label>ZIP Code</label>
+      <div class="zip-row">
+        <input type="text" id="inp-zip" placeholder="e.g. 78701" maxlength="10" />
+        <button id="btn-zip">Look Up</button>
+      </div>
+      <div id="zip-status"></div>
+      <div class="or-divider">or enter coordinates</div>
       <label>Center Point</label>
       <div class="input-row">
         <input type="number" id="inp-lat" placeholder="Latitude" step="any" value="30.2672" />
@@ -858,6 +925,49 @@
     document.getElementById('spinner').classList.toggle('active', on);
     document.getElementById('btn-analyze').disabled = on;
   }
+
+  // ── ZIP code lookup ───────────────────────────────────────────────────────
+  async function lookupZip() {
+    const zip = document.getElementById('inp-zip').value.trim();
+    const status = document.getElementById('zip-status');
+    if (!zip) return;
+
+    const btn = document.getElementById('btn-zip');
+    btn.disabled = true;
+    status.style.color = '#5a7fa0';
+    status.textContent = 'Looking up…';
+
+    try {
+      const resp = await fetch(
+        `https://nominatim.openstreetmap.org/search?postalcode=${encodeURIComponent(zip)}&countrycodes=us&format=json&limit=1`,
+        { headers: { 'Accept-Language': 'en', 'User-Agent': 'FRA-Flood-Monitor/1.0' } }
+      );
+      const results = await resp.json();
+      if (!results.length) {
+        status.style.color = '#ff9a3c';
+        status.textContent = 'ZIP not found — check and retry.';
+        return;
+      }
+      const { lat, lon, display_name } = results[0];
+      document.getElementById('inp-lat').value = parseFloat(lat).toFixed(5);
+      document.getElementById('inp-lon').value = parseFloat(lon).toFixed(5);
+      const city = display_name.split(',')[0];
+      status.style.color = '#3ecf6e';
+      status.textContent = `Found: ${city}`;
+      updateCenterMarker(parseFloat(lat), parseFloat(lon));
+      map.setView([parseFloat(lat), parseFloat(lon)], 10);
+    } catch (e) {
+      status.style.color = '#ff4f4f';
+      status.textContent = 'Lookup failed — check connection.';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById('btn-zip').addEventListener('click', lookupZip);
+  document.getElementById('inp-zip').addEventListener('keydown', e => {
+    if (e.key === 'Enter') lookupZip();
+  });
 
   // Init center marker and default gauge load
   updateCenterMarker(30.2672, -97.7431);
